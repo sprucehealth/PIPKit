@@ -11,6 +11,7 @@ import UIKit
 final class PIPKitEventDispatcher {
     
     var pipPosition: PIPPosition
+    private var keyboardFrame: CGRect = .zero  // Store the keyboard frame
 
     private var window: UIWindow? {
         rootViewController?.view.window
@@ -23,11 +24,19 @@ final class PIPKitEventDispatcher {
     private var startOffset: CGPoint = .zero
     private var deviceNotificationObserver: NSObjectProtocol?
     private var windowSubviewsObservation: NSKeyValueObservation?
+    private var keyboardShowObserver: NSObjectProtocol?
+    private var keyboardHideObserver: NSObjectProtocol?
     
     deinit {
         windowSubviewsObservation?.invalidate()
         deviceNotificationObserver.flatMap {
             NotificationCenter.default.removeObserver($0)
+        }
+        if let keyboardShowObserver = keyboardShowObserver {
+            NotificationCenter.default.removeObserver(keyboardShowObserver)
+        }
+        if let keyboardHideObserver = keyboardHideObserver {
+            NotificationCenter.default.removeObserver(keyboardHideObserver)
         }
     }
     
@@ -110,6 +119,26 @@ final class PIPKitEventDispatcher {
                                                                                 }, completion:nil)
         }
         
+        // Add keyboard observers
+        keyboardShowObserver = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: nil) { [weak self] notification in
+            if let keyboardFrame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+               let animationDuration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue {
+                self?.keyboardFrame = keyboardFrame
+                UIView.animate(withDuration: animationDuration) {
+                    self?.updateFrame()
+                }
+            }
+        }
+        
+        keyboardHideObserver = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: nil) { [weak self] notification in
+            self?.keyboardFrame = .zero
+            if let animationDuration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue {
+                UIView.animate(withDuration: animationDuration) {
+                    self?.updateFrame()
+                }
+            }
+        }
+        
         windowSubviewsObservation = window?.observe(\.subviews,
                                                      options: [.initial, .new],
                                                      changeHandler: { [weak self] window, _ in
@@ -148,27 +177,23 @@ final class PIPKitEventDispatcher {
             }
         }
         
+        // Calculate the PIP frame considering the keyboard
         switch pipPosition {
-        case .topLeft:
+        case .topLeft, .middleLeft, .bottomLeft:
             origin.x = edgeInsets.left + pipEdgeInsets.left
+        case .topRight, .middleRight, .bottomRight:
+            origin.x = window.frame.width - edgeInsets.right - pipEdgeInsets.right - pipSize.width
+        }
+        
+        let verticalLimit = window.frame.height - edgeInsets.bottom - pipEdgeInsets.bottom - pipSize.height - keyboardFrame.height
+        switch pipPosition {
+        case .topLeft, .topRight:
             origin.y = edgeInsets.top + pipEdgeInsets.top
-        case .middleLeft:
-            origin.x = edgeInsets.left + pipEdgeInsets.left
-            let vh = (window.frame.height - (edgeInsets.top + edgeInsets.bottom)) / 3.0
+        case .middleLeft, .middleRight:
+            let vh = (verticalLimit - (edgeInsets.top + edgeInsets.bottom)) / 3.0
             origin.y = edgeInsets.top + (vh * 2.0) - ((vh + pipSize.height) / 2.0)
-        case .bottomLeft:
-            origin.x = edgeInsets.left + pipEdgeInsets.left
-            origin.y = window.frame.height - edgeInsets.bottom - pipEdgeInsets.bottom - pipSize.height
-        case .topRight:
-            origin.x = window.frame.width - edgeInsets.right - pipEdgeInsets.right - pipSize.width
-            origin.y = edgeInsets.top + pipEdgeInsets.top
-        case .middleRight:
-            origin.x = window.frame.width - edgeInsets.right - pipEdgeInsets.right - pipSize.width
-            let vh = (window.frame.height - (edgeInsets.top + edgeInsets.bottom)) / 3.0
-            origin.y = edgeInsets.top + (vh * 2.0) - ((vh + pipSize.height) / 2.0)
-        case .bottomRight:
-            origin.x = window.frame.width - edgeInsets.right - pipEdgeInsets.right - pipSize.width
-            origin.y = window.frame.height - edgeInsets.bottom - pipEdgeInsets.bottom - pipSize.height
+        case .bottomLeft, .bottomRight:
+            origin.y = verticalLimit
         }
         
         rootViewController.view.frame = CGRect(origin: origin, size: pipSize)
@@ -187,12 +212,12 @@ final class PIPKitEventDispatcher {
             safeAreaInsets = window.safeAreaInsets
         }
         
-        let vh = (window.frame.height - (safeAreaInsets.top + safeAreaInsets.bottom)) / 3.0
+        let vh = (window.frame.height - keyboardFrame.height - (safeAreaInsets.top + safeAreaInsets.bottom)) / 3.0
         
         switch center.y {
         case let y where y < safeAreaInsets.top + vh:
             pipPosition = center.x < window.frame.width / 2.0 ? .topLeft : .topRight
-        case let y where y > window.frame.height - safeAreaInsets.bottom - vh:
+        case let y where y > window.frame.height - safeAreaInsets.bottom - vh - keyboardFrame.height:
             pipPosition = center.x < window.frame.width / 2.0 ? .bottomLeft : .bottomRight
         default:
             pipPosition = center.x < window.frame.width / 2.0 ? .middleLeft : .middleRight
@@ -233,9 +258,11 @@ final class PIPKitEventDispatcher {
             offset.x = max(edgeInsets.left + pipEdgeInsets.left + (pipSize.width / 2.0),
                            min(offset.x,
                                (window.frame.width - edgeInsets.right - pipEdgeInsets.right) - (pipSize.width / 2.0)))
+            
+            // Adjust the y-coordinate to respect the keyboard limits
+            let maxY = window.frame.height - edgeInsets.bottom - pipEdgeInsets.bottom - keyboardFrame.height - (pipSize.height / 2.0)
             offset.y = max(edgeInsets.top + pipEdgeInsets.top + (pipSize.height / 2.0),
-                           min(offset.y,
-                               (window.frame.height - (edgeInsets.bottom) - pipEdgeInsets.bottom) - (pipSize.height / 2.0)))
+                           min(offset.y, maxY))
             
             rootViewController.view.center = offset
         case .ended:
@@ -257,3 +284,4 @@ extension PIPUsable where Self: UIViewController {
     }
     
 }
+
