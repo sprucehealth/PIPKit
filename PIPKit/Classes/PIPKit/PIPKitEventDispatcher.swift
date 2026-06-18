@@ -213,7 +213,9 @@ final class PIPKitEventDispatcher {
         var isNeedUpdate: Bool = false
         
         if keyboardObserver.isVisible {
-            guard keyboardFrame.contains(rootViewController.view.frame) else {
+            // Lift the PIP on any overlap with the keyboard, not only when it is
+            // fully covered, so a partially-obscured PIP still moves clear.
+            guard keyboardFrame.intersects(rootViewController.view.frame) else {
                 return
             }
             
