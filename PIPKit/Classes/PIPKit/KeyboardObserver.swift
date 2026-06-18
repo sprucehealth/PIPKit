@@ -211,7 +211,13 @@ extension KeyboardObserver: UIGestureRecognizerDelegate {
 private extension KeyboardObserver {
     
     var screenHeight: CGFloat {
-        UIScreen.main.bounds.height
+        // Prefer the active scene's screen so the keyboard math is correct in
+        // multi-window/UIScene setups; fall back to the main screen pre-iOS 13.
+        if #available(iOS 13.0, *),
+           let windowScene = UIApplication.shared._keyWindow?.windowScene {
+            return windowScene.screen.bounds.height
+        }
+        return UIScreen.main.bounds.height
     }
     
 }

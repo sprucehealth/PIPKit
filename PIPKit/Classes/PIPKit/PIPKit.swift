@@ -94,6 +94,11 @@ public final class PIPKit {
         }
         
         let newWindow = PIPKitWindow()
+        // Under the UIScene lifecycle a window must be attached to an active
+        // UIWindowScene or it is never displayed. Reuse the key window's scene.
+        if #available(iOS 13.0, *) {
+            newWindow.windowScene = UIApplication.shared._keyWindow?.windowScene
+        }
         newWindow.backgroundColor = .clear
         newWindow.rootViewController = viewController
         newWindow.windowLevel = .alert
