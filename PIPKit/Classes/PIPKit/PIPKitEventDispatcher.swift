@@ -22,7 +22,7 @@ final class PIPKitEventDispatcher {
     private lazy var keyboardObserver: KeyboardObserver = {
         KeyboardObserver(delegate: self, adjustSafeAreaInset: true)
     }()
-    private var isMoveFromKeyboard: Bool = false
+    private var pipPositionBeforeKeyboard: PIPPosition?
     
     private var startOffset: CGPoint = .zero
     private var deviceNotificationObserver: NSObjectProtocol?
@@ -209,34 +209,39 @@ final class PIPKitEventDispatcher {
             return
         }
         
-        let keyboardFrame = keyboardObserver.keyboardFrame
-        var isNeedUpdate: Bool = false
-        
-        if keyboardObserver.isVisible {
-            // Lift the PIP on any overlap with the keyboard, not only when it is
-            // fully covered, so a partially-obscured PIP still moves clear.
-            guard keyboardFrame.intersects(rootViewController.view.frame) else {
-                return
-            }
-            
-            var frame = rootViewController.view.frame
-            frame.origin.y -= keyboardObserver.visibleHeight
-            rootViewController.view.frame = frame
-            isNeedUpdate = true
-            isMoveFromKeyboard = keyboardEvent
-        } else if isMoveFromKeyboard {
-            var frame = rootViewController.view.frame
-            frame.origin.y += keyboardObserver.keyboardHeight
-            rootViewController.view.frame = frame
-            isNeedUpdate = true
-            isMoveFromKeyboard = false
-        }
-        
-        if isNeedUpdate {
+        if !keyboardEvent {
+            // A drag just ended: snap to the corner nearest where the user left the PIP.
             updatePIPPosition()
-            UIView.animate(withDuration: 0.15) { [weak self] in
-                self?.updatePIPFrame()
+            // A fresh drag supersedes any position saved for restoring after the keyboard hides.
+            pipPositionBeforeKeyboard = nil
+        }
+
+        if keyboardObserver.isVisible {
+            // A bottom-anchored PIP rests at the very bottom of the window, where the keyboard
+            // always covers it. Promote it to the middle position on the same side so it stays
+            // clear, remembering the original to restore once the keyboard hides. We choose the
+            // position explicitly rather than nudging the frame up, because a temporary shift can
+            // still re-resolve to a bottom position (e.g. a short keyboard) and snap back under it.
+            switch pipPosition {
+            case .bottomLeft:
+                pipPositionBeforeKeyboard = pipPosition
+                pipPosition = .middleLeft
+                rootViewController.didChangePosition(pipPosition)
+            case .bottomRight:
+                pipPositionBeforeKeyboard = pipPosition
+                pipPosition = .middleRight
+                rootViewController.didChangePosition(pipPosition)
+            default:
+                break
             }
+        } else if let restoredPosition = pipPositionBeforeKeyboard {
+            pipPosition = restoredPosition
+            pipPositionBeforeKeyboard = nil
+            rootViewController.didChangePosition(pipPosition)
+        }
+
+        UIView.animate(withDuration: 0.15) { [weak self] in
+            self?.updatePIPFrame()
         }
     }
     
@@ -253,7 +258,7 @@ final class PIPKitEventDispatcher {
         
         switch gesture.state {
         case .began:
-            isMoveFromKeyboard = false
+            pipPositionBeforeKeyboard = nil
             startOffset = rootViewController.view.center
         case .changed:
             let transition = gesture.translation(in: window)
