@@ -20,6 +20,10 @@ final class PIPKitEventDispatcher {
     private lazy var transitionGesture: UIPanGestureRecognizer = {
         UIPanGestureRecognizer(target: self, action: #selector(onTransition(_:)))
     }()
+    private lazy var keyboardObserver: KeyboardObserver = {
+        KeyboardObserver(delegate: self, adjustSafeAreaInset: true)
+    }()
+    private var pipPositionBeforeKeyboard: PIPPosition?
     
     private var startOffset: CGPoint = .zero
     private var deviceNotificationObserver: NSObjectProtocol?
@@ -28,6 +32,7 @@ final class PIPKitEventDispatcher {
     private var keyboardHideObserver: NSObjectProtocol?
     
     deinit {
+        keyboardObserver.deactivate()
         windowSubviewsObservation?.invalidate()
         deviceNotificationObserver.flatMap {
             NotificationCenter.default.removeObserver($0)
@@ -103,12 +108,7 @@ final class PIPKitEventDispatcher {
         }
         
         if let pipCorner = rootViewController?.pipCorner {
-            rootViewController?.view.layer.cornerRadius = pipCorner.radius
-            if let curve = pipCorner.curve {
-                if #available(iOS 13.0, *) {
-                    rootViewController?.view.layer.cornerCurve = curve
-                }
-            }
+            rootViewController.flatMap { pipCorner.apply(view: $0.view) }
         }
         
         deviceNotificationObserver = NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification,
@@ -153,11 +153,13 @@ final class PIPKitEventDispatcher {
     private func didEnterFullScreen() {
         transitionGesture.isEnabled = false
         rootViewController?.didChangedState(.full)
+        keyboardObserver.deactivate()
     }
     
     private func didEnterPIP() {
         transitionGesture.isEnabled = true
         rootViewController?.didChangedState(.pip)
+        keyboardObserver.activate()
     }
     
     private func updatePIPFrame() {
@@ -226,6 +228,48 @@ final class PIPKitEventDispatcher {
         rootViewController.didChangePosition(pipPosition)
     }
     
+    private func updatePIPPositionAndMove(from keyboardEvent: Bool) {
+        guard PIPKit.isPIP,
+              let rootViewController = rootViewController else {
+            return
+        }
+        
+        if !keyboardEvent {
+            // A drag just ended: snap to the corner nearest where the user left the PIP.
+            updatePIPPosition()
+            // A fresh drag supersedes any position saved for restoring after the keyboard hides.
+            pipPositionBeforeKeyboard = nil
+        }
+
+        if keyboardObserver.isVisible {
+            // A bottom-anchored PIP rests at the very bottom of the window, where the keyboard
+            // always covers it. Promote it to the middle position on the same side so it stays
+            // clear, remembering the original to restore once the keyboard hides. We choose the
+            // position explicitly rather than nudging the frame up, because a temporary shift can
+            // still re-resolve to a bottom position (e.g. a short keyboard) and snap back under it.
+            switch pipPosition {
+            case .bottomLeft:
+                pipPositionBeforeKeyboard = pipPosition
+                pipPosition = .middleLeft
+                rootViewController.didChangePosition(pipPosition)
+            case .bottomRight:
+                pipPositionBeforeKeyboard = pipPosition
+                pipPosition = .middleRight
+                rootViewController.didChangePosition(pipPosition)
+            default:
+                break
+            }
+        } else if let restoredPosition = pipPositionBeforeKeyboard {
+            pipPosition = restoredPosition
+            pipPositionBeforeKeyboard = nil
+            rootViewController.didChangePosition(pipPosition)
+        }
+
+        UIView.animate(withDuration: 0.15) { [weak self] in
+            self?.updatePIPFrame()
+        }
+    }
+    
     // MARK: - Action
     @objc
     private func onTransition(_ gesture: UIPanGestureRecognizer) {
@@ -239,6 +283,7 @@ final class PIPKitEventDispatcher {
         
         switch gesture.state {
         case .began:
+            pipPositionBeforeKeyboard = nil
             startOffset = rootViewController.view.center
         case .changed:
             let transition = gesture.translation(in: window)
@@ -266,13 +311,18 @@ final class PIPKitEventDispatcher {
             
             rootViewController.view.center = offset
         case .ended:
-            updatePIPPosition()
-            UIView.animate(withDuration: 0.15) { [weak self] in
-                self?.updatePIPFrame()
-            }
+            updatePIPPositionAndMove(from: false)
         default:
             break
         }
+    }
+    
+}
+
+extension PIPKitEventDispatcher: KeyboardObserverDelegate {
+
+    func keyboard(_ observer: KeyboardObserver, changed visibleHeight: CGFloat) {
+        updatePIPPositionAndMove(from: true)
     }
     
 }
