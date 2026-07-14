@@ -117,8 +117,9 @@ final class KeyboardObserver: NSObject {
         }
         
         isObserving = false
+        observations.forEach { NotificationCenter.default.removeObserver($0) }
         observations.removeAll()
-        
+
         panGesture.flatMap {
             panGesture?.view?.removeGestureRecognizer($0)
         }
