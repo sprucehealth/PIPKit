@@ -8,8 +8,8 @@
 
 Pod::Spec.new do |s|
   s.name             = 'PIPKit'
-  s.version          = '1.1.1'
-  s.summary          = 'PIP(Picture in Picture) for iOS'
+  s.version          = '1.1.1-spruce'
+  s.summary          = 'PIP(Picture in Picture) for iOS; UIScene fixup by Spruce Health'
 
 # This description is used to generate tags and improve search results.
 #   * Think: What does it do? Why did you write it? What is the focus?
